@@ -39,6 +39,7 @@ tests g b c m a = testGroup "Teams API"
     [ test m "create team" (testCreateTeam g b c a)
     , test m "create multiple binding teams fail" (testCreateMulitpleBindingTeams g b a)
     , test m "create team with members" (testCreateTeamWithMembers g b c)
+    , test m "create 1-1 conversation between binding team members" (testCreateOne2OneWithMembers g b c a)
     , test m "add new team member" (testAddTeamMember g b c)
     , test m "add new team member binding teams" (testAddTeamMemberCheckBound g b a)
     , test m "add new team member internal" (testAddTeamMemberInternal g b c a)
@@ -81,8 +82,7 @@ testCreateMulitpleBindingTeams g b a = do
     assertQueue a tCreate
     -- Cannot create more teams if bound (used internal API)
     let nt = NonBindingNewTeam $ newNewTeam (unsafeRange "owner") (unsafeRange "icon")
-    void $ post (g . path "/teams" . zUser owner . zConn "conn" . json nt) <!! do
-        const 403 === statusCode
+    post (g . path "/teams" . zUser owner . zConn "conn" . json nt) !!! const 403 === statusCode
 
     -- If never used the internal API, can create multiple teams
     owner' <- Util.randomUser b
@@ -114,6 +114,29 @@ testCreateTeamWithMembers g b c = do
         e^.eventType @?= TeamCreate
         e^.eventTeam @?= (team^.teamId)
         e^.eventData @?= Just (EdTeamCreate team)
+
+testCreateOne2OneWithMembers :: Galley -> Brig -> Cannon -> Maybe Aws.Env -> Http ()
+testCreateOne2OneWithMembers g b c a = do
+    ensureNoOne2OneNonBinding
+    -- Test with binding teams
+    owner <- Util.randomUser b
+    tid   <- Util.createTeamInternal g "foo" owner
+    assertQueue a tCreate
+    let p1 = Util.symmPermissions [CreateConversation]
+    mem1 <- flip newTeamMember p1 <$> Util.randomUser b
+    Util.addTeamMemberInternal g tid mem1
+    Util.postO2OConv g owner (mem1^.userId) Nothing !!! const 201 === statusCode
+  where
+    ensureNoOne2OneNonBinding = do
+        owner <- Util.randomUser b
+        let p1 = Util.symmPermissions [CreateConversation, AddConversationMember]
+        let p2 = Util.symmPermissions [CreateConversation, AddConversationMember, AddTeamMember]
+        mem1 <- flip newTeamMember p1 <$> Util.randomUser b
+        mem2 <- flip newTeamMember p2 <$> Util.randomUser b
+        Util.connectUsers b owner (list1 (mem1^.userId) [mem2^.userId])
+        tid <- Util.createTeam g "foo" owner [mem1, mem2]
+        -- Cannot create a 1-1 conversation, not connected nor same binding team
+        Util.postO2OConv g (mem1^.userId) (mem2^.userId) Nothing !!! const 403 === statusCode
 
 testAddTeamMember :: Galley -> Brig -> Cannon -> Http ()
 testAddTeamMember g b c = do

@@ -95,19 +95,19 @@ createSelfConversation zusr = do
 createOne2OneConversation :: UserId ::: ConnId ::: Request ::: JSON -> Galley Response
 createOne2OneConversation (zusr ::: zcon ::: req ::: _) = do
     j <- fromBody req invalidPayload
-    when (isJust (newConvTeam j)) $
-        throwM noTeamConv
     u <- rangeChecked (newConvUsers j) :: Galley (Range 1 1 [UserId])
     (x, y) <- toUUIDs zusr (List.head $ fromRange u)
     when (x == y) $
         throwM $ invalidOp "Cannot create a 1-1 with yourself"
-    ensureConnected zusr (fromRange u)
+    case (newConvTeam j) of
+        Just ti -> throwM noTeamConv
+        Nothing -> ensureConnected zusr (fromRange u)
     n <- rangeCheckedMaybe (newConvName j)
     c <- Data.conversation (Data.one2OneConvId x y)
-    maybe (create x y n) (conversationResponse status200 zusr) c
+    maybe (create x y n $ newConvTeam j) (conversationResponse status200 zusr) c
   where
-    create x y n = do
-        c <- Data.createOne2OneConversation x y n
+    create x y n tinfo = do
+        c <- Data.createOne2OneConversation x y n tinfo
         notifyCreatedConversation Nothing zusr (Just zcon) c
         conversationResponse status201 zusr c
 

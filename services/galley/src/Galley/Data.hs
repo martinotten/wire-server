@@ -347,16 +347,22 @@ createConnectConversation a b name conn = do
 createOne2OneConversation :: U.UUID U.V4
                           -> U.UUID U.V4
                           -> Maybe (Range 1 256 Text)
+                          -> Maybe ConvTeamInfo
                           -> Galley Conversation
-createOne2OneConversation a b name = do
+createOne2OneConversation a b name tinfo = do
     let conv = one2OneConvId a b
         a'   = Id (U.unpack a)
         b'   = Id (U.unpack b)
     now <- liftIO getCurrentTime
-    retry x5 $
-        write Cql.insertConv (params Quorum (conv, One2OneConv, a', privateOnly, fromRange <$> name, Nothing))
+    retry x5 $ case tinfo of
+        Nothing -> write Cql.insertConv (params Quorum (conv, One2OneConv, a', privateOnly, fromRange <$> name, Nothing))
+        Just ti -> batch $ do
+            setType BatchLogged
+            setConsistency Quorum
+            addPrepQuery Cql.insertConv (conv, One2OneConv, a', privateOnly, fromRange <$> name, Just (cnvTeamId ti))
+            addPrepQuery Cql.insertTeamConv (cnvTeamId ti, conv, False)
     mems <- snd <$> addMembers now conv a' (rcast $ a' <| rsingleton b')
-    return $ newConv conv One2OneConv a' (toList mems) (singleton PrivateAccess) name Nothing
+    return $ newConv conv One2OneConv a' (toList mems) (singleton PrivateAccess) name (cnvTeamId <$> tinfo)
 
 updateConversation :: MonadClient m => ConvId -> Range 1 256 Text -> m ()
 updateConversation cid name = retry x5 $ write Cql.updateConvName (params Quorum (fromRange name, cid))
